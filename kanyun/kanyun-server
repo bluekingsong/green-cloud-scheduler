@@ -1,0 +1,75 @@
+#!/usr/bin/env python
+import sys
+import time
+import signal
+import traceback
+import ConfigParser
+import json
+import zmq
+from kanyun.common.app import *
+from kanyun.server import data_server
+from kanyun.server.data_server import MSG_TYPE
+from kanyun.database.mysqldb import MysqlDb;
+from kanyun.database.redisclient import CacheClient
+
+running = True
+config = ConfigParser.ConfigParser()
+
+if __name__ == '__main__':
+    plugins = dict()
+    plugins[MSG_TYPE.HEART_BEAT] = data_server.plugin_heartbeat
+    plugins[MSG_TYPE.AGENT] = data_server.plugin_decoder_agent
+    
+    # register autotask
+    autotasks = list()
+    autotasks.append(data_server.autotask_heartbeat)
+    # 
+
+    app = App(conf="kanyun.conf", log="/tmp/kanyun-server.log")
+    cfg = app.get_cfg('server')
+    
+    data_server.register_signal()
+    context = zmq.Context()
+
+    # Socket with direct access to the feedback: used to syncronize start of batch
+    socket = context.socket(zmq.PULL)
+    socket.bind("tcp://%(host)s:%(port)s" % cfg)
+    print "listen tcp://%(host)s:%(port)s" % cfg
+    poller = zmq.Poller()
+    poller.register(socket, zmq.POLLIN)
+
+    ### change by lanjinsong
+    mysql_db=MysqlDb(app.get_cfg('mysql_db'));
+    redis_db=CacheClient(app.get_cfg('mysql_db'))
+
+    while True:
+        try:
+            socks = dict(poller.poll(20000))
+        except zmq.core.error.ZMQError:
+            traceback.print_exc();
+            break;
+            pass
+        
+        # parse the data from worker and save to database
+        if socks.get(socket) == zmq.POLLIN:
+            try:
+                msg_type, report = socket.recv_multipart()
+            except zmq.core.error.ZMQError:
+                traceback.print_exc();
+                break;
+                pass
+            
+            if plugins.has_key(msg_type) and len(report) > 0:
+                report_str = ''.join(report)
+                #print 'recv(%s)'%(msg_type);
+                data = json.loads(report_str)
+                try:
+                    plugins[msg_type](app=app, db=mysql_db, cache=redis_db, data=data)
+                except:
+                    traceback.print_exc()
+                    break;
+            else:
+                print 'invaild data(%s):%s' % (msg_type, report_str)
+            
+        for task in autotasks:
+            task()
