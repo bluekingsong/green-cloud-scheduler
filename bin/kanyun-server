@@ -1,0 +1,103 @@
+#!/usr/bin/env python
+# vim: tabstop=4 shiftwidth=4 softtabstop=4
+#
+# Copyright 2012 Sina Corporation
+# All Rights Reserved.
+# Author: YuWei Peng <pengyuwei@gmail.com>
+#
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
+
+import sys
+import time
+import signal
+import traceback
+import ConfigParser
+import json
+import zmq
+from kanyun.common.app import *
+from kanyun.server import data_server
+from kanyun.server.data_server import MSG_TYPE
+from kanyun.database.mysqldb import MysqlDb;
+
+"""
+kanyun data server.
+"""
+
+running = True
+config = ConfigParser.ConfigParser()
+
+if __name__ == '__main__':
+    # register_plugin
+    plugins = dict()
+    plugins[MSG_TYPE.HEART_BEAT] = data_server.plugin_heartbeat
+    plugins[MSG_TYPE.TRAFFIC_ACCOUNTING] = data_server.plugin_decoder_traffic_accounting
+    plugins[MSG_TYPE.AGENT] = data_server.plugin_decoder_agent
+    
+    # register autotask
+    autotasks = list()
+    autotasks.append(data_server.autotask_heartbeat)
+    # 
+
+    app = App(conf="kanyun.conf", log="/tmp/kanyun-server.log")
+    logger = app.get_logger()
+    cfg = app.get_cfg('server')
+    
+    data_server.register_signal()
+    context = zmq.Context()
+
+    # Socket with direct access to the feedback: used to syncronize start of batch
+    socket = context.socket(zmq.PULL)
+    socket.bind("tcp://%(host)s:%(port)s" % cfg)
+    print "listen tcp://%(host)s:%(port)s" % cfg
+    #print "db_con_str=",eval(cfg["mysql_conn_str"]),'type=',type(eval(cfg["mysql_conn_str"]));
+    poller = zmq.Poller()
+    poller.register(socket, zmq.POLLIN)
+
+    # data DB
+    #db = CassaDb('data', cfg['db_host'])
+
+### change by lanjinsong
+    mysql_db=MysqlDb(app.get_cfg('mysql_db'));
+
+    while True:
+        try:
+            socks = dict(poller.poll(20000))
+        except zmq.core.error.ZMQError:
+            traceback.print_exc();
+            break;
+            pass
+        
+        # parse the data from worker and save to database
+        if socks.get(socket) == zmq.POLLIN:
+            try:
+                msg_type, report = socket.recv_multipart()
+            except zmq.core.error.ZMQError:
+                traceback.print_exc();
+                break;
+                pass
+            
+            if plugins.has_key(msg_type) and len(report) > 0:
+                report_str = ''.join(report)
+                #print 'recv(%s)'%(msg_type);
+                data = json.loads(report_str)
+                print 'recv(%s):%s' % (msg_type, data)
+                try:
+                    plugins[msg_type](app=app, db=mysql_db, data=data)
+                except:
+                    traceback.print_exc()
+                    break;
+            else:
+                print 'invaild data(%s):%s' % (msg_type, report_str)
+            
+        for task in autotasks:
+            task()

@@ -1,0 +1,107 @@
+#!/usr/bin/env python
+# vim: tabstop=4 shiftwidth=4 softtabstop=4
+#
+# Copyright 2012 Sina Corporation
+# All Rights Reserved.
+# Author: YuWei Peng <pengyuwei@gmail.com>
+#
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
+
+import sys
+import time
+import signal
+import traceback
+import ConfigParser
+import json
+import zmq
+from kanyun.common.const import *
+from kanyun.common.app import *
+from kanyun.server import api_server
+
+#from kanyun.database.cassadb import CassaDb
+
+def on_message_receive(api, method, arg):
+    if method == 'query_usage_report':
+        print '*' * 60
+        print "query_usage_report:", msg['args']
+
+        ##(rs, count, _) = api.query_usage_report(msg['args'], **(msg['args']))
+        rs = api.query_usage_report(msg['args'], **(msg['args']))
+        return rs
+    elif method == 'list_instance':
+        cf_str = arg['metric']
+        rs = api.get_instances_list()
+        return rs
+    elif method == 'update_alert_policy':
+        print '*' * 60
+        print "update_alert_policy:", msg['args']
+        
+        return None
+    else:
+        return None
+
+
+if __name__ == '__main__':
+    app = App(conf="kanyun.conf", log="/tmp/kanyun-api.log")
+    logger = app.get_logger()
+    cfg = app.get_cfg('api')
+    data_cfg=app.get_cfg('mysql_db');
+    api = api_server.ApiServer(data_cfg)
+
+    context = zmq.Context()
+    socket = context.socket(zmq.REP)
+    socket.bind("tcp://%(api_host)s:%(api_port)s" % cfg)
+    print "listen tcp://%(api_host)s:%(api_port)s" % cfg
+
+    while True:
+        msg_type, msg_uuid, message = socket.recv_multipart()
+        try:
+            data = dict()
+            msg = json.loads(message)
+            if not msg.has_key('method') or not msg.has_key("args"):
+                socket.send_multipart([msg_type, msg_uuid, json.dumps(data)])
+                continue
+            data = on_message_receive(api, msg['method'], msg['args'])
+            if data is None:
+                data = ()
+            #print "response:", data
+            resp = {'code': 200,
+                    'message': 'Success',
+                    'data': data,
+                   }
+            socket.send_multipart([msg_type, msg_uuid, json.dumps(resp)])
+        except Exception, e:
+            traceback.print_exc()
+            print "[EXP]", message
+            print "[EXP]", e
+            socket.send_multipart(
+                        [msg_type, msg_uuid, json.dumps(
+                        {'code': 500,
+                         'message': 'Request failed.',
+                         'data':None,
+                        })]
+                        )
+        """
+        {
+    'method': 'query_usage_report',
+    'args': {
+        'metric': 'network',
+        'statistic': 'sum',
+        'period': 5,
+        'timestamp_from': '2012-02-20T12:12:12',
+        'timestamp_to': '2012-02-22T12:12:12',
+        }
+    }
+        """
+        
+        
