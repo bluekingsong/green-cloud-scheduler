@@ -24,7 +24,7 @@ import zmq
 import logging
 import traceback
 import ConfigParser
-
+from os import popen;
 from kanyun.common.app import *
 from kanyun.common.const import *
 """
@@ -52,6 +52,12 @@ def plugin_local_cpu(worker_id):
     info = ret.stdout.readlines()
     return MSG_TYPE.LOCAL_INFO, [{"cpu": ''.join(info)}]
 
+def plugin_local_machine(worker_id):
+    """ Data format:{work_id:[['cpu','total',(timestamp,us,sy,id,wa)],['mem','total',]]} """
+    cmd = "sleep %d;top -n 1 -b|grep Cpu|awk '{print $2}'" % (random.randint(0,30))
+    ret = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, close_fds=True)
+    info = ret.stdout.readlines()
+    return MSG_TYPE.LOCAL_INFO, [{"cpu": ''.join(info)}]
 
 def plugin_traffic_accounting_info(worker_id):
     import plugin_traffic_accounting

@@ -19,7 +19,6 @@
 import datetime
 import time
 from xml.etree import ElementTree
-
 import libvirt
 """
 collect info of vm
